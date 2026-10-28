@@ -1,0 +1,87 @@
+# ==============================================================================
+# Python Virtual Environments (Bỏ qua thư mục .venv > 5GB)
+# ==============================================================================
+.venv/
+venv/
+env/
+ENV/
+server/.venv/
+
+# ==============================================================================
+# Byte-compiled / Cache / Build Artifacts
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==============================================================================
+# Sensitive Environment Configuration (Không đưa thông tin nhạy cảm lên Git)
+# ==============================================================================
+.env
+.env.local
+.env.*.local
+!.env.example
+!server/.env.example
+
+# ==============================================================================
+# Large AI Weights & Models (>100MB không phù hợp GitHub)
+# ==============================================================================
+# CLIP weights (ViT-B-32.pt ~354MB vượt giới hạn 100MB của GitHub)
+weights/
+**/weights/
+
+# Model checkpoints (.pt, .pth, .onnx, .bin)
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# Giữ lại thư mục models/ trong Git
+!models/
+!server/models/
+!models/.gitkeep
+!server/models/.gitkeep
+
+# ==============================================================================
+# Runtime Outputs, Temp Files & Logs
+# ==============================================================================
+*.log
+data/audio/*.mp3
+data/images/*.jpg
+data/images/*.png
+server/data/audio/*.mp3
+server/data/images/*.jpg
+server/data/images/*.png
+temp_audio/
+server/temp_audio/
+debug_images/
+server/debug_images/
+*.tmp
+*.tmp.mp3
+
+# ==============================================================================
+# OS & Editor Settings
+# ==============================================================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
