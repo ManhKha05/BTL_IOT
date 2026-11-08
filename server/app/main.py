@@ -12,6 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
+import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -81,16 +82,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Could not load EasyOCR at startup (will retry on first OCR request): {e}")
 
-    # 2. Start audio cleanup background worker
-    cleanup_task = asyncio.create_task(audio_cleanup_worker())
-    
-    yield
-
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except (asyncio.CancelledError, Exception):
-        pass
+    async with httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=60)) as gemini_client:
+        app.state.gemini_client = gemini_client
+        cleanup_task = asyncio.create_task(audio_cleanup_worker())
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 # Create FastAPI application instance
@@ -101,7 +103,7 @@ app = FastAPI(
         "AI Server for Wearable Device Supporting Visually Impaired Users.\n\n"
         "Features:\n"
         "- **Object Detection**: Fast YOLOv8n inference with spatial division (Left, Center, Right).\n"
-        "- **Natural Vietnamese Descriptions**: Converts detected objects into natural Vietnamese sentences.\n"
+        "- **Scene Assistant**: Describes the camera frame in Vietnamese using the image and YOLO hints.\n"
         "- **Edge-TTS Voice Synthesis**: High-quality Vietnamese speech (`vi-VN-HoaiMyNeural`).\n"
         "- **Integrated Processing**: Single-call pipeline (`/api/process/detect`) for ESP32-CAM.\n"
         "- **OCR (Chức năng 3)**: Đọc chữ biển hiệu / nhãn đồ vật bằng EasyOCR + Edge-TTS (`/api/process/ocr`).\n"

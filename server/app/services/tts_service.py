@@ -51,7 +51,7 @@ class TTSService:
             voice: Giọng Edge-TTS (chỉ dùng khi engine="edge"), mặc định vi-VN-HoaiMyNeural.
             rate: Tốc độ đọc Edge-TTS (ví dụ "+0%"), mặc định settings.TTS_RATE.
             engine: None/"gtts" giữ thứ tự mặc định (gTTS trước, Edge-TTS dự phòng);
-                    "edge" dùng Edge-TTS trước, gTTS làm dự phòng (chức năng đọc chữ OCR).
+                    "edge" dùng Edge-TTS trước, gTTS làm dự phòng.
 
         Returns:
             Tuple: (audio_id, file_path, file_size_bytes, duration_ms)

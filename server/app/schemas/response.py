@@ -30,7 +30,7 @@ class DetectedObject(BaseModel):
     )
     spoken_label: Optional[str] = Field(
         None,
-        description="Nhãn thực tế được sử dụng trong câu đọc tiếng Việt (ví dụ: 'vật thể' khi độ tin cậy thấp)"
+        description="Nhãn dùng để tạo câu đọc tiếng Việt (ví dụ: 'nghi là xe máy' khi độ tin cậy thấp)"
     )
 
 

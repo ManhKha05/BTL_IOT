@@ -29,12 +29,13 @@ class ProcessDetectResponse(BaseModel):
     success: bool = Field(True, description="Trạng thái thực hiện chung của request")
     total_objects: int = Field(..., description="Tổng số lượng vật thể phát hiện được")
     objects: List[DetectedObject] = Field(default_factory=list, description="Toàn bộ danh sách vật thể phát hiện được (phục vụ debug)")
-    spoken_objects: List[DetectedObject] = Field(default_factory=list, description="Danh sách các vật thể được chọn ưu tiên để mô tả bằng giọng nói")
+    spoken_objects: List[DetectedObject] = Field(default_factory=list, description="Các phát hiện YOLO được trợ lý nhắc đến trong câu mô tả")
     relationships: List[ObjectRelationship] = Field(
         default_factory=list,
         description="Danh sách quan hệ giữa các vật thể phân tích được (phục vụ debug/kiểm thử)"
     )
-    description: str = Field(..., description="Câu mô tả tiếng Việt tự nhiên tạo từ spoken_objects")
+    description: str = Field(..., description="Mô tả cảnh tiếng Việt từ trợ lý AI hoặc thông báo chưa có mô tả")
+    description_error: Optional[str] = Field(None, description="Lý do trợ lý AI không tạo được mô tả")
     
     # Audio fields
     audio_id: Optional[str] = Field(None, description="UUID của file MP3 (null nếu TTS lỗi)")

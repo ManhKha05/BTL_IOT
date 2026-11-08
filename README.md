@@ -119,7 +119,7 @@ Khi log hiện `Application startup complete`, server sẵn sàng. Địa chỉ 
 
 | Phương thức | Đường dẫn | Mô tả |
 |---|---|---|
-| `POST` | `/api/process/detect` | **Chức năng nhận diện:** ảnh → YOLO-World → câu mô tả → MP3 |
+| `POST` | `/api/process/detect` | **Chức năng nhận diện:** ảnh + phát hiện YOLO → trợ lý AI mô tả cảnh → MP3 |
 | `POST` | `/api/process/ocr` | **Chức năng đọc chữ:** ảnh → EasyOCR → câu "Nội dung biển hiệu: ..." → MP3 (Edge-TTS) |
 | `POST` | `/api/detect` | Chỉ nhận diện (không TTS) |
 | `POST` | `/api/detect/visualize` | Trả ảnh JPEG có bounding box |
@@ -149,6 +149,16 @@ Phản hồi rút gọn:
 ```
 
 Luồng trên ESP32-CAM: chụp ảnh → `POST` tới endpoint tương ứng với thao tác nút → đọc `audio_url` trong JSON → tải MP3 và phát qua loa.
+
+### Trợ lý mô tả cảnh cho Single Click
+
+Tạo khóa trong [Google AI Studio](https://aistudio.google.com/app/apikey), điền `GEMINI_API_KEY` trong `server/.env` rồi khởi động lại server. Mặc định `SCENE_AI_MODEL=gemini-3.5-flash-lite` và thời gian chờ là 12 giây (`SCENE_AI_TIMEOUT_SECONDS`). Server gửi ảnh JPEG đã thu nhỏ cùng gợi ý YOLO tới Gemini. Dùng khóa thuộc dự án Free Tier để chạy trong [hạn mức miễn phí của Google](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite).
+
+Khi chạy trên mạng dùng chung, có thể giới hạn thiết bị được gọi API bằng `API_KEY` và header `X-API-Key` trên ESP32-CAM.
+
+Mặc định `SCENE_AI_MEDIA_RESOLUTION=LOW` để giảm lượng dữ liệu ảnh Gemini xử lý. Nếu mô tả bỏ sót chi tiết nhỏ, đặt `SCENE_AI_MEDIA_RESOLUTION=MEDIUM` trong `server/.env` rồi khởi động lại. Thiết lập này chỉ áp dụng cho Gemini.
+
+Prompt của trợ lý nằm ở [scene_assistant_prompt.md](server/app/services/scene_assistant_prompt.md). Trợ lý ưu tiên vật cản và hướng, dùng tối đa hai câu tiếng Việt ngắn, và diễn đạt mức độ không chắc chắn nếu ảnh khó đọc. `spoken_objects` liệt kê các phát hiện YOLO mà trợ lý đã nhắc tới. Nếu thiếu khóa hoặc dịch vụ AI lỗi, endpoint vẫn trả kết quả YOLO kèm `description_error` và thử tạo MP3 thông báo. `/api/detect` dùng mô tả cục bộ để kiểm thử.
 
 ---
 

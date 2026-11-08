@@ -61,8 +61,8 @@ def prioritize_objects(
     Applies Object Prioritization with Relationship Analysis:
     1. Scores all detected objects using multi-feature priority calculation.
     2. Analyzes spatial relationships (person+motorcycle, person+bicycle, person+car).
-    3. Builds semantic groups to prevent duplicate counting.
-    4. Selects top prioritized groups meeting threshold.
+    3. Keeps each detected object separate for spoken descriptions.
+    4. Selects the highest-priority objects meeting the threshold.
     5. Flags is_spoken=True on constituent objects.
     6. Returns PrioritizeResult (compatible with tuple unpacking).
     """
@@ -75,10 +75,10 @@ def prioritize_objects(
     # 2. Analyze geometric relationships
     relationships = relationship_service.analyze(objects, img_width, img_height)
 
-    # 3. Build unified semantic groups
-    semantic_groups = relationship_service.group(objects, relationships, img_width, img_height)
+    # 3. Use each object's own label and position for speech.
+    semantic_groups = relationship_service.group(objects, [], img_width, img_height)
 
-    # 4. Filter semantic groups with foreground prominence & min threshold
+    # 4. Keep the most relevant objects for the voice response.
     selected_groups = prioritization_service.select_top_candidates(
         candidates=semantic_groups,
         img_width=img_width,
@@ -166,7 +166,7 @@ class YOLOService:
             return self.description_service.generate_description(semantic_groups, total_objects_count=len(spoken_objects))
 
         if not spoken_objects:
-            return "Không phát hiện vật thể trong khung hình."
+            return self.description_service.generate_description([])
 
         w = img_width or 640
         h = img_height or 480
@@ -174,6 +174,16 @@ class YOLOService:
             relationships = self.relationship_service.analyze(spoken_objects, w, h)
         groups = self.relationship_service.group(spoken_objects, relationships, w, h)
         return self.description_service.generate_description(groups, total_objects_count=len(spoken_objects))
+
+    async def analyze_scene(
+        self,
+        img_rgb: np.ndarray,
+        conf_thresh: Optional[float] = None,
+        max_spoken: Optional[int] = None
+    ) -> Tuple[PrioritizeResult, float]:
+        h, w, _ = img_rgb.shape
+        raw_objects, inf_time = await self.detection_service.detect_raw(img_rgb, conf_thresh)
+        return self.prioritize_objects(raw_objects, w, h, max_spoken=max_spoken), inf_time
 
     async def detect(
         self,
@@ -188,9 +198,8 @@ class YOLOService:
         3. Relationship analysis & semantic grouping
         4. Natural Vietnamese description generation
         """
-        h, w, _ = img_rgb.shape
-        raw_objects, inf_time = await self.detection_service.detect_raw(img_rgb, conf_thresh)
-        prioritize_res = self.prioritize_objects(raw_objects, w, h, max_spoken=max_spoken)
+        # The standalone detection API still uses the local description.
+        prioritize_res, inf_time = await self.analyze_scene(img_rgb, conf_thresh, max_spoken)
 
         all_objects = prioritize_res.all_objects
         spoken_objects = prioritize_res.spoken_objects

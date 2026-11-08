@@ -692,7 +692,7 @@
       statusTag.style.color = '#34d399';
 
       // 1. Description
-      descBox.textContent = data.description;
+      descBox.textContent = data.description_error || data.description;
 
       // 2. Annotated image preview & tab switch
       if (data.debug_image_url) {
@@ -716,11 +716,12 @@
 
       // 4. Audio Player & Download button
       if (data.audio_url) {
-        audioPlayer.src = data.audio_url;
+        const audioPath = new URL(data.audio_url, window.location.href).pathname;
+        audioPlayer.src = audioPath;
         audioPlayer.play().catch(() => {
           console.log('Autoplay requires user gesture');
         });
-        downloadBtn.href = data.audio_url;
+        downloadBtn.href = audioPath;
         downloadBtn.style.display = 'inline-flex';
       } else {
         audioPlayer.removeAttribute('src');

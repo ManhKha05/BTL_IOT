@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.schemas.response import ErrorResponse
 from app.schemas.tts import ProcessDetectResponse
+from app.services.scene_assistant_service import SceneAssistantError, describe_scene
 from app.services.tts_service import tts_service
 from app.services.yolo_service import yolo_service
 from app.utils.image_utils import (
@@ -38,12 +39,12 @@ router = APIRouter(prefix="/process", tags=["Integrated Processing (Vision + Voi
         415: {"model": ErrorResponse, "description": "Định dạng không được hỗ trợ (chỉ JPEG/PNG)"},
         500: {"model": ErrorResponse, "description": "Lỗi nội bộ khi chạy suy luận AI"}
     },
-    summary="Quy trình tích hợp: Nhận ảnh → YOLO-World → Tạo câu mô tả → Edge-TTS giọng nói",
+    summary="Nhận ảnh → YOLO-World → Trợ lý AI mô tả cảnh → Giọng nói",
     description=(
         "Quy trình toàn diện cho ESP32-CAM và ứng dụng thông minh:\n"
         "1. Nhận ảnh JPEG (qua multipart hoặc raw body nhị phân).\n"
         "2. Phát hiện vật thể, vật cản và vị trí (trái/giữa/phải) bằng YOLO-World Small.\n"
-        "3. Tự động sinh câu mô tả tiếng Việt tự nhiên và cảnh báo an toàn.\n"
+        "3. Trợ lý AI nhìn ảnh và đối chiếu với các phát hiện YOLO để mô tả ngắn bằng tiếng Việt.\n"
         "4. Gọi Edge-TTS tạo file âm thanh MP3 tương ứng.\n"
         "5. Trả về kết quả nhận diện kèm URL để ESP32-CAM hoặc trình duyệt tải file MP3."
     )
@@ -80,7 +81,7 @@ async def process_detect_endpoint(
     engine_name = Path(settings.YOLO_MODEL_PATH).stem
     conf_thresh = confidence if confidence is not None else settings.CONFIDENCE_THRESHOLD
     try:
-        objects, spoken_objects, relationships, generated_desc, inf_time_ms = await yolo_service.detect(
+        analysis, inf_time_ms = await yolo_service.analyze_scene(
             img_rgb=img_rgb,
             conf_thresh=conf_thresh
         )
@@ -91,16 +92,23 @@ async def process_detect_endpoint(
             detail=f"Lỗi trong quá trình suy luận mô hình AI ({engine_name}): {str(e)}"
         )
 
-    # Nội dung mô tả được tạo từ spoken_objects
-    if not spoken_objects:
-        if not objects:
-            description = "Không phát hiện vật thể trong khung hình."
-        else:
-            description = "Không phát hiện vật thể quan trọng phía trước."
-    else:
-        description = generated_desc
+    objects = analysis.all_objects
+    description_error: Optional[str] = None
+    mentioned_ids: set[int] = set()
+    try:
+        scene = await describe_scene(img_rgb, objects, client=request.app.state.gemini_client)
+        description = scene.description
+        mentioned_ids = set(scene.mentioned_ids)
+    except SceneAssistantError as exc:
+        description_error = str(exc)
+        description = "Trợ lý chưa thể mô tả cảnh phía trước."
+        logger.warning("Scene assistant unavailable: %s", description_error)
 
-    # 4. Tùy chọn lưu ảnh debug có Bounding Box
+    for index, obj in enumerate(objects):
+        obj.is_spoken = index in mentioned_ids
+    spoken_objects = [obj for obj in objects if obj.is_spoken]
+
+    # Tùy chọn lưu ảnh debug có Bounding Box
     should_save = save_debug if save_debug is not None else settings.SAVE_DEBUG_IMAGES
     debug_image_url: Optional[str] = None
     if should_save:
@@ -115,23 +123,20 @@ async def process_detect_endpoint(
         except Exception as e:
             logger.warning(f"Could not save data image: {e}")
 
-    # 5. Gọi Edge-TTS để tạo file giọng nói tiếng Việt từ description
+    # Read a brief status message if the scene assistant is unavailable.
     audio_id: Optional[str] = None
     audio_url: Optional[str] = None
     audio_error: Optional[str] = None
     tts_time_ms: Optional[float] = None
 
     try:
-        tts_id, _, _, t_ms = await tts_service.generate_speech(description)
-        audio_id = tts_id
-        audio_url = settings.get_audio_url(tts_id)
-        tts_time_ms = t_ms
-    except Exception as e:
-        audio_error = str(e)
-        logger.warning(
-            f"TTS synthesis failed for description '{description}': {audio_error}. "
-            "Returning AI detection results without audio."
+        audio_id, _, _, tts_time_ms = await tts_service.generate_speech(
+            description, engine=settings.TTS_ENGINE, voice=settings.TTS_VOICE
         )
+        audio_url = settings.get_audio_url(audio_id)
+    except Exception as exc:
+        audio_error = str(exc)
+        logger.warning("TTS synthesis failed: %s", audio_error)
 
     total_time_ms = (time.perf_counter() - total_start_time) * 1000.0
 
@@ -146,8 +151,9 @@ async def process_detect_endpoint(
         total_objects=len(objects),
         objects=objects,
         spoken_objects=spoken_objects,
-        relationships=relationships,
+        relationships=analysis.relationships,
         description=description,
+        description_error=description_error,
         audio_id=audio_id,
         audio_url=audio_url,
         audio_format="mp3" if audio_url else None,

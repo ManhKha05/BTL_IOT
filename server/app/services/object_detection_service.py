@@ -77,7 +77,7 @@ VIETNAMESE_LABELS: Dict[str, str] = {
     "potted plant": "chậu cây",
     "flower pot": "chậu cây",
     "road barrier": "rào chắn",
-    "fence": "rào chắn",
+    "fence": "hàng rào",
     "bollard": "cột chắn",
     "utility pole": "cột điện",
     "electric pole": "cột điện",
@@ -121,6 +121,7 @@ CLASS_MIN_CONFIDENCE: Dict[str, float] = {
     "steps": 0.08,
 }
 
+STOP_SIGN_MIN_CONFIDENCE = 0.50
 
 
 def determine_position(bbox: List[int], img_width: int) -> PositionEnum:
@@ -244,8 +245,10 @@ class ObjectDetectionService:
         start_time = time.perf_counter()
         # Feed model with floor conf so candidate hazard boxes are not pruned in forward pass
         model_conf = min(conf_thresh, 0.06)
+        # Ultralytics expects BGR for NumPy image inputs.
+        img_bgr = np.ascontiguousarray(img_rgb[..., ::-1])
         results = self.model(
-            img_rgb,
+            img_bgr,
             conf=model_conf,
             device=self.device,
             verbose=False
@@ -263,20 +266,24 @@ class ObjectDetectionService:
         for box in boxes:
             conf = float(box.conf[0].item())
             cls_id = int(box.cls[0].item())
-            if cls_id < len(self.classes):
-                label_en = self.classes[cls_id]
-            else:
-                label_en = f"class_{cls_id}"
+            if not 0 <= cls_id < len(self.classes):
+                continue
 
+            label_en = self.classes[cls_id]
             min_required = CLASS_MIN_CONFIDENCE.get(label_en.lower(), conf_thresh)
+            if label_en == "stop sign":
+                # A partial view of another road sign can resemble a stop sign.
+                min_required = max(min_required, STOP_SIGN_MIN_CONFIDENCE)
             if conf < min_required:
                 continue
 
             xyxy = box.xyxy[0].tolist()
-            x1 = max(0, min(w - 1, int(round(xyxy[0]))))
-            y1 = max(0, min(h - 1, int(round(xyxy[1]))))
+            x1 = max(0, min(w, int(round(xyxy[0]))))
+            y1 = max(0, min(h, int(round(xyxy[1]))))
             x2 = max(0, min(w, int(round(xyxy[2]))))
             y2 = max(0, min(h, int(round(xyxy[3]))))
+            if x1 >= x2 or y1 >= y2:
+                continue
             bbox = [x1, y1, x2, y2]
 
             box_area = float((x2 - x1) * (y2 - y1))

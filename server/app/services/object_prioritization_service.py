@@ -154,18 +154,9 @@ def calculate_priority_score(
 
 
 def get_object_spoken_label(obj: DetectedObject) -> str:
-    """
-    Get spoken Vietnamese label for an object.
-    If CAUTIOUS_DESCRIPTION_ENABLED is True and confidence < CONFIDENCE_CERTAIN_THRESHOLD:
-    - For high-priority navigation & falling hazards (stairs, staircase, steps, road barrier, bollard):
-      returns 'nghi là {label_vi}' (e.g. 'nghi là cầu thang') so the user is alerted to the hazard cautiously.
-    - For general items: return generic 'vật thể' to prevent misleading false assertions.
-    """
+    """Keep the Vietnamese class name and qualify detections below the certainty threshold."""
     if settings.CAUTIOUS_DESCRIPTION_ENABLED and obj.confidence < settings.CONFIDENCE_CERTAIN_THRESHOLD:
-        hazard_classes = {"stairs", "staircase", "steps", "road barrier", "traffic cone", "bollard"}
-        if obj.label.lower() in hazard_classes:
-            return f"nghi là {obj.label_vi}"
-        return "vật thể"
+        return f"nghi là {obj.label_vi}"
     return obj.label_vi
 
 

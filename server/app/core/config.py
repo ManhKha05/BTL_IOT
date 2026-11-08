@@ -3,7 +3,7 @@ import socket
 from pathlib import Path
 from typing import List
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 # Determine project root (the directory containing app/, models/, etc.)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -53,9 +53,7 @@ class Settings(BaseModel):
     CONFIDENCE_THRESHOLD: float = Field(default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "0.35")))
     
     # Cautious description threshold:
-    # When detection confidence is between CONFIDENCE_THRESHOLD and CONFIDENCE_CERTAIN_THRESHOLD,
-    # the scene description will use cautious phrasing ("vật thể" / "vật cản") instead of asserting
-    # an uncertain specific label (e.g. avoiding falsely claiming a dog is a cow).
+    # Qualify the name in speech when an accepted detection is below this threshold.
     CONFIDENCE_CERTAIN_THRESHOLD: float = Field(default_factory=lambda: float(os.getenv("CONFIDENCE_CERTAIN_THRESHOLD", "0.50")))
     CAUTIOUS_DESCRIPTION_ENABLED: bool = Field(default_factory=lambda: os.getenv("CAUTIOUS_DESCRIPTION_ENABLED", "true").lower() in ("true", "1", "yes"))
     DEVICE: str = Field(default_factory=lambda: os.getenv("DEVICE", "cpu"))
@@ -70,13 +68,21 @@ class Settings(BaseModel):
     # Security
     API_KEY: str = Field(default_factory=lambda: os.getenv("API_KEY", ""))
 
+    GEMINI_API_KEY: SecretStr = Field(default_factory=lambda: SecretStr(os.getenv("GEMINI_API_KEY", "")))
+    SCENE_AI_MODEL: str = Field(default_factory=lambda: os.getenv("SCENE_AI_MODEL", "gemini-3.5-flash-lite"))
+    SCENE_AI_MEDIA_RESOLUTION: str = Field(
+        default_factory=lambda: os.getenv("SCENE_AI_MEDIA_RESOLUTION", "LOW")
+    )
+    SCENE_AI_TIMEOUT_SECONDS: float = Field(
+        default_factory=lambda: float(os.getenv("SCENE_AI_TIMEOUT_SECONDS", "12")),
+        gt=0,
+        validate_default=True,
+    )
+
     # Text-to-Speech Audio Configuration
-    # Options for TTS_VOICE:
-    # - 'female-north' or 'gtts' (Giọng nữ miền Bắc - Chị Google chuẩn)
-    # - 'vi-VN-NamMinhNeural' (Giọng nam miền Bắc - Microsoft Edge)
-    # - 'vi-VN-HoaiMyNeural' (Giọng nữ miền Nam - Microsoft Edge)
-    TTS_ENGINE: str = Field(default_factory=lambda: os.getenv("TTS_ENGINE", "gtts"))
-    TTS_VOICE: str = Field(default_factory=lambda: os.getenv("TTS_VOICE", "female-north"))
+    # Edge voice options include vi-VN-NamMinhNeural and vi-VN-HoaiMyNeural.
+    TTS_ENGINE: str = Field(default_factory=lambda: os.getenv("TTS_ENGINE", "edge"))
+    TTS_VOICE: str = Field(default_factory=lambda: os.getenv("TTS_VOICE", "vi-VN-HoaiMyNeural"))
     TTS_RATE: str = Field(default_factory=lambda: os.getenv("TTS_RATE", "+0%"))
     AUDIO_TTL_MINUTES: int = Field(default_factory=lambda: int(os.getenv("AUDIO_TTL_MINUTES", "30")))
     MAX_CONCURRENT_TTS: int = Field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_TTS", "3")))
