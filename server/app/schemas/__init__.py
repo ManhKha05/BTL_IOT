@@ -9,6 +9,7 @@ from app.schemas.response import (
     HealthResponse,
     ErrorResponse
 )
+from app.schemas.ocr import OCRTextLine, OCRResponse, ProcessOCRResponse
 from app.schemas.tts import (
     TTSRequest,
     TTSResponse,
@@ -25,4 +26,7 @@ __all__ = [
     "TTSRequest",
     "TTSResponse",
     "ProcessDetectResponse",
+    "OCRTextLine",
+    "OCRResponse",
+    "ProcessOCRResponse",
 ]

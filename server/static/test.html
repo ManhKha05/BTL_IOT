@@ -459,6 +459,11 @@
           </div>
         </div>
 
+        <div class="img-tab-bar" style="margin-bottom: 12px;">
+          <button class="tab-btn active" id="modeDetect" onclick="setMode('detect')">🚶 Nhận diện vật thể (Single Click)</button>
+          <button class="tab-btn" id="modeOcr" onclick="setMode('ocr')">📖 Đọc chữ OCR (Long Press)</button>
+        </div>
+
         <button class="btn-primary" id="processBtn" disabled onclick="runIntegratedProcess()">
           <div class="spinner" id="spinner"></div>
           <span id="btnText">🚀 Nhận diện và Đọc (POST /api/process/detect)</span>
@@ -500,12 +505,12 @@
         <!-- Prioritization Table -->
         <div>
           <label style="font-size: 12px; color: #94a3b8; font-weight: 600; display: flex; justify-content: space-between; margin-bottom: 6px;">
-            <span>DANH SÁCH VẬT THỂ & ĐIỂM ƯU TIÊN</span>
-            <span style="font-size: 11px; color: #64748b;">(Xanh = Được chọn đọc; Xám = Đã lọc)</span>
+            <span id="tableTitle">DANH SÁCH VẬT THỂ & ĐIỂM ƯU TIÊN</span>
+            <span id="tableHint" style="font-size: 11px; color: #64748b;">(Xanh = Được chọn đọc; Xám = Đã lọc)</span>
           </label>
           <div class="table-container">
             <table class="objects-table">
-              <thead>
+              <thead id="objectsThead">
                 <tr>
                   <th>Vật thể</th>
                   <th>Vị trí</th>
@@ -550,6 +555,43 @@
     const downloadBtn = document.getElementById('downloadBtn');
     const objectsTbody = document.getElementById('objectsTbody');
     const statusTag = document.getElementById('statusTag');
+
+    const MODES = {
+      detect: {
+        endpoint: '/api/process/detect',
+        label: '🚀 Nhận diện và Đọc (POST /api/process/detect)',
+        busy: 'Đang nhận diện & tạo giọng nói...',
+        title: 'DANH SÁCH VẬT THỂ & ĐIỂM ƯU TIÊN',
+        hint: '(Xanh = Được chọn đọc; Xám = Đã lọc)',
+        thead: '<tr><th>Vật thể</th><th>Vị trí</th><th>Tin cậy</th><th>Ưu tiên (Score)</th><th>Trạng thái</th></tr>'
+      },
+      ocr: {
+        endpoint: '/api/process/ocr',
+        label: '📖 Đọc chữ và Đọc to (POST /api/process/ocr)',
+        busy: 'Đang nhận dạng chữ & tạo giọng nói...',
+        title: 'CÁC DÒNG CHỮ NHẬN DẠNG ĐƯỢC (THỨ TỰ ĐỌC)',
+        hint: '(EasyOCR vi + en)',
+        thead: '<tr><th>#</th><th colspan="2">Dòng chữ</th><th>Tin cậy</th><th>Khung [x1,y1,x2,y2]</th></tr>'
+      }
+    };
+    let currentMode = 'detect';
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    function setMode(mode) {
+      currentMode = mode;
+      const cfg = MODES[mode];
+      document.getElementById('modeDetect').classList.toggle('active', mode === 'detect');
+      document.getElementById('modeOcr').classList.toggle('active', mode === 'ocr');
+      btnText.textContent = cfg.label;
+      document.getElementById('tableTitle').textContent = cfg.title;
+      document.getElementById('tableHint').textContent = cfg.hint;
+      document.getElementById('objectsThead').innerHTML = cfg.thead;
+      objectsTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Chưa có dữ liệu</td></tr>';
+      relContainer.style.display = 'none';
+    }
 
     let selectedFile = null;
     let originalDataUrl = null;
@@ -614,7 +656,7 @@
 
       processBtn.disabled = true;
       spinner.style.display = 'inline-block';
-      btnText.textContent = 'Đang nhận diện & tạo giọng nói...';
+      btnText.textContent = MODES[currentMode].busy;
       statusTag.textContent = 'Đang xử lý...';
       statusTag.style.color = '#38bdf8';
 
@@ -622,7 +664,7 @@
       formData.append('file', selectedFile);
 
       try {
-        const res = await fetch('/api/process/detect', {
+        const res = await fetch(MODES[currentMode].endpoint, {
           method: 'POST',
           body: formData
         });
@@ -641,7 +683,7 @@
       } finally {
         processBtn.disabled = false;
         spinner.style.display = 'none';
-        btnText.textContent = '🚀 Nhận diện và Đọc (POST /api/process/detect)';
+        btnText.textContent = MODES[currentMode].label;
       }
     }
 
@@ -683,6 +725,28 @@
       } else {
         audioPlayer.removeAttribute('src');
         downloadBtn.style.display = 'none';
+      }
+
+      // 5a. OCR lines table
+      if (currentMode === 'ocr') {
+        if (data.lines && data.lines.length > 0) {
+          objectsTbody.innerHTML = data.lines.map((ln, i) => `
+            <tr class="spoken-row">
+              <td>${i + 1}</td>
+              <td colspan="2"><strong>${escapeHtml(ln.text)}</strong></td>
+              <td>${(ln.confidence * 100).toFixed(0)}%</td>
+              <td style="font-family:'JetBrains Mono', monospace; font-size:11px;">[${ln.bbox.join(', ')}]</td>
+            </tr>`).join('');
+        } else {
+          objectsTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Không đọc được dòng chữ nào</td></tr>';
+        }
+        document.getElementById('mModel').textContent = data.engine || 'easyocr';
+        document.getElementById('mYolo').textContent = data.inference_time_ms + 'ms';
+        document.getElementById('mTTS').textContent = (data.tts_time_ms ? data.tts_time_ms + 'ms' : '--');
+        document.getElementById('mTotal').textContent = data.total_time_ms + 'ms';
+        document.getElementById('mSpoken').textContent = `${(data.lines || []).length} dòng`;
+        if (data.audio_error) console.warn('TTS error:', data.audio_error);
+        return;
       }
 
       // 5. Prioritized Objects Table

@@ -18,11 +18,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.detect import router as detect_router
+from app.api.ocr import router as ocr_router
 from app.api.process import router as process_router
 from app.api.tts import router as tts_router
 from app.core.config import settings
 from app.core.logging import logger
 from app.schemas.response import HealthResponse
+from app.services.ocr_service import ocr_service
 from app.services.tts_service import tts_service
 from app.services.yolo_service import yolo_service
 
@@ -73,6 +75,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.critical(f"FATAL: Could not load production YOLO model at startup: {e}")
 
+    # 1b. Load EasyOCR reader once (Chức năng 3: đọc chữ biển hiệu / nhãn)
+    try:
+        await asyncio.to_thread(ocr_service.load_model)
+    except Exception as e:
+        logger.error(f"Could not load EasyOCR at startup (will retry on first OCR request): {e}")
+
     # 2. Start audio cleanup background worker
     cleanup_task = asyncio.create_task(audio_cleanup_worker())
     
@@ -96,6 +104,7 @@ app = FastAPI(
         "- **Natural Vietnamese Descriptions**: Converts detected objects into natural Vietnamese sentences.\n"
         "- **Edge-TTS Voice Synthesis**: High-quality Vietnamese speech (`vi-VN-HoaiMyNeural`).\n"
         "- **Integrated Processing**: Single-call pipeline (`/api/process/detect`) for ESP32-CAM.\n"
+        "- **OCR (Chức năng 3)**: Đọc chữ biển hiệu / nhãn đồ vật bằng EasyOCR + Edge-TTS (`/api/process/ocr`).\n"
         "- **Interactive Test Page**: Visit `/test` on your laptop to upload photos, see detections, and listen to generated speech."
     ),
     lifespan=lifespan,
@@ -113,6 +122,9 @@ app.add_middleware(
 )
 
 # Mount data directory for serving ESP32 photos and audio
+# (tạo thư mục trước khi mount: StaticFiles báo lỗi nếu thư mục chưa tồn tại trên máy mới clone)
+settings.IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+settings.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/data/images", StaticFiles(directory=str(settings.IMAGE_DIR)), name="data_images")
 app.mount("/debug_images", StaticFiles(directory=str(settings.IMAGE_DIR)), name="debug_images")
 
@@ -152,6 +164,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(detect_router, prefix=settings.API_PREFIX)
 app.include_router(tts_router, prefix=settings.API_PREFIX)
 app.include_router(process_router, prefix=settings.API_PREFIX)
+app.include_router(ocr_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["General"])
@@ -171,6 +184,8 @@ async def root():
             "tts": f"{settings.API_PREFIX}/tts",
             "audio": f"{settings.API_PREFIX}/audio/{{audio_id}}",
             "process_detect": f"{settings.API_PREFIX}/process/detect",
+            "ocr": f"{settings.API_PREFIX}/ocr",
+            "process_ocr": f"{settings.API_PREFIX}/process/ocr",
             "health": "/health"
         }
     }
@@ -193,6 +208,7 @@ async def health_check():
         service="assistive-ai-server",
         version=settings.VERSION,
         model_loaded=yolo_service.is_loaded,
+        ocr_loaded=ocr_service.is_loaded,
         model_name=str(settings.MODEL_PATH),
         device=yolo_service.device,
         server_ip=settings.LOCAL_IP,

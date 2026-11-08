@@ -40,13 +40,18 @@ class TTSService:
         self,
         text: str,
         voice: Optional[str] = None,
-        rate: Optional[str] = None
+        rate: Optional[str] = None,
+        engine: Optional[str] = None
     ) -> Tuple[str, Path, int, float]:
         """
         Chuyển đổi văn bản tiếng Việt thành file MP3 với GIỌNG NỮ MIỀN BẮC (mặc định chuẩn).
 
         Args:
             text: Nội dung văn bản tiếng Việt cần đọc (tối đa 500 ký tự).
+            voice: Giọng Edge-TTS (chỉ dùng khi engine="edge"), mặc định vi-VN-HoaiMyNeural.
+            rate: Tốc độ đọc Edge-TTS (ví dụ "+0%"), mặc định settings.TTS_RATE.
+            engine: None/"gtts" giữ thứ tự mặc định (gTTS trước, Edge-TTS dự phòng);
+                    "edge" dùng Edge-TTS trước, gTTS làm dự phòng (chức năng đọc chữ OCR).
 
         Returns:
             Tuple: (audio_id, file_path, file_size_bytes, duration_ms)
@@ -73,6 +78,38 @@ class TTSService:
         semaphore = self._get_semaphore()
 
         async with semaphore:
+            # 0. Edge-TTS ưu tiên khi được yêu cầu rõ ràng (engine="edge")
+            if (engine or "").lower() == "edge":
+                edge_voice = voice or "vi-VN-HoaiMyNeural"
+                edge_rate = rate or settings.TTS_RATE
+                # Dịch vụ Edge-TTS đôi khi trả "No audio was received" ngẫu nhiên -> thử lại vài lần
+                edge_attempts = 3
+                for attempt in range(edge_attempts):
+                    try:
+                        logger.info(
+                            f"Synthesizing Edge-TTS voice '{edge_voice}' (attempt {attempt + 1}/{edge_attempts}) "
+                            f"for audio_id={audio_id} ({len(cleaned_text)} chars)..."
+                        )
+                        communicate = edge_tts.Communicate(text=cleaned_text, voice=edge_voice, rate=edge_rate)
+                        await asyncio.wait_for(communicate.save(str(temp_file)), timeout=settings.TTS_TIMEOUT_SECONDS)
+                        if not temp_file.exists() or temp_file.stat().st_size == 0:
+                            raise RuntimeError("Tệp âm thanh Edge-TTS sinh ra bị rỗng.")
+                        temp_file.replace(final_file)
+                        duration_ms = (time.perf_counter() - start_time) * 1000.0
+                        file_size = final_file.stat().st_size
+                        logger.info(f"Edge-TTS speech created: audio_id={audio_id}, size={file_size} bytes in {duration_ms:.1f}ms.")
+                        return audio_id, final_file, file_size, round(duration_ms, 2)
+                    except Exception as e:
+                        if temp_file.exists():
+                            try:
+                                temp_file.unlink()
+                            except OSError:
+                                pass
+                        if attempt < edge_attempts - 1:
+                            await asyncio.sleep(0.3 * (attempt + 1))
+                        else:
+                            logger.warning(f"Edge-TTS failed after {edge_attempts} attempts ({e}). Falling back to gTTS...")
+
             # 1. ƯU TIÊN HÀNG ĐẦU: Giọng Nữ Miền Bắc (Chị Google - Chuẩn Bắc)
             max_retries = 3
             last_err = None

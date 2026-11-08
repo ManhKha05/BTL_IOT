@@ -102,6 +102,18 @@ class Settings(BaseModel):
     SAME_CLASS_RELATIVE_RATIO: float = Field(default_factory=lambda: float(os.getenv("SAME_CLASS_RELATIVE_RATIO", "0.70")))
     URGENT_GROUND_HAZARD_Y2: float = Field(default_factory=lambda: float(os.getenv("URGENT_GROUND_HAZARD_Y2", "0.70")))
 
+    # OCR Settings (Chức năng 3: đọc chữ biển hiệu / nhãn đồ vật bằng EasyOCR)
+    OCR_LANGUAGES: List[str] = Field(
+        default_factory=lambda: [
+            lang.strip() for lang in os.getenv("OCR_LANGUAGES", "vi,en").split(",") if lang.strip()
+        ]
+    )
+    OCR_MIN_CONFIDENCE: float = Field(default_factory=lambda: float(os.getenv("OCR_MIN_CONFIDENCE", "0.30")))
+    OCR_MAX_IMAGE_SIDE: int = Field(default_factory=lambda: int(os.getenv("OCR_MAX_IMAGE_SIDE", "1600")))
+    OCR_MAX_SPOKEN_CHARS: int = Field(default_factory=lambda: int(os.getenv("OCR_MAX_SPOKEN_CHARS", "300")))
+    OCR_TTS_ENGINE: str = Field(default_factory=lambda: os.getenv("OCR_TTS_ENGINE", "edge").lower())
+    OCR_TTS_VOICE: str = Field(default_factory=lambda: os.getenv("OCR_TTS_VOICE", "vi-VN-HoaiMyNeural"))
+
     # Project & Model Directories
     BASE_DIR: Path = PROJECT_ROOT
     MODELS_DIR: Path = PROJECT_ROOT / "models"

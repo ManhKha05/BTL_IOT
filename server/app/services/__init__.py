@@ -6,6 +6,7 @@ from app.services.object_prioritization_service import ObjectPrioritizationServi
 from app.services.object_relationship_service import ObjectRelationshipService, relationship_service
 from app.services.description_service import DescriptionService, description_service
 from app.services.tts_service import TTSService, tts_service
+from app.services.ocr_service import OCRService, ocr_service
 from app.services.yolo_service import YOLOService, yolo_service
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "description_service",
     "TTSService",
     "tts_service",
+    "OCRService",
+    "ocr_service",
     "YOLOService",
     "yolo_service",
 ]

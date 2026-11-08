@@ -73,6 +73,7 @@ class HealthResponse(BaseModel):
     service: str = "assistive-ai-server"
     version: str = "1.0.0"
     model_loaded: bool
+    ocr_loaded: bool = False
     model_name: str
     device: str
     server_ip: str
