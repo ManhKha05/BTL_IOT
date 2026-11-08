@@ -120,7 +120,7 @@ Khi log hiện `Application startup complete`, server sẵn sàng. Địa chỉ 
 | Phương thức | Đường dẫn | Mô tả |
 |---|---|---|
 | `POST` | `/api/process/detect` | **Chức năng nhận diện:** ảnh + phát hiện YOLO → trợ lý AI mô tả cảnh → MP3 |
-| `POST` | `/api/process/ocr` | **Chức năng đọc chữ:** ảnh → EasyOCR → câu "Nội dung biển hiệu: ..." → MP3 (Edge-TTS) |
+| `POST` | `/api/process/ocr` | **Chức năng đọc chữ:** ảnh → Gemini (dự phòng EasyOCR) → lọc theo cỡ chữ → câu "Biển hiệu: ..." → MP3 (Edge-TTS). Query: `context`, `detail` |
 | `POST` | `/api/detect` | Chỉ nhận diện (không TTS) |
 | `POST` | `/api/detect/visualize` | Trả ảnh JPEG có bounding box |
 | `POST` | `/api/ocr` | Chỉ OCR (không TTS) |
@@ -141,12 +141,46 @@ Phản hồi rút gọn:
 ```json
 {
   "success": true,
-  "text": "NHÀ THUỐC PHARMACITY",
-  "description": "Nội dung biển hiệu: Nhà thuốc Pharmacity.",
+  "context": "sign",
+  "text": "BÚN BÒ HUẾ\nBÚN ĐẬU MẸT",
+  "description": "Biển hiệu: Bún Bò Huế. Bún Đậu Mẹt.",
+  "engine": "gemini",
   "audio_url": "http://192.168.1.10:8000/api/audio/9f2c...",
-  "lines": [{"text": "NHÀ THUỐC PHARMACITY", "confidence": 0.91, "bbox": [..]}]
+  "lines": [
+    {"text": "BÚN BÒ HUẾ", "confidence": 0.91, "bbox": [..], "tier": "main", "spoken": true},
+    {"text": "BÚN ĐẬU MẸT", "confidence": 0.84, "bbox": [..], "tier": "sub", "spoken": true},
+    {"text": "SĐT: 0912 345 678", "confidence": 0.88, "bbox": [..], "tier": "detail", "spoken": false}
+  ]
 }
 ```
+
+### Cách đọc chữ (chức năng 3)
+
+**0. Nhận dạng chữ.** Khi đã điền `GEMINI_API_KEY`, server dùng Gemini (`OCR_GEMINI_MODEL=gemini-3.1-flash-lite`) để đọc chữ. Gemini trả về từng dòng chữ kèm khung, độ rõ và **mức cỡ chữ** do nó nhìn ảnh xếp theo quy tắc ở mục 1. Lý do: khung chữ của Gemini chỉ là ước lượng và xê dịch giữa các lần gọi, nên không dùng để tính tỉ lệ. Đo trên laptop CPU 4 nhân, Gemini mất khoảng 2–5 giây mỗi ảnh, còn EasyOCR mất 12–20 giây. Nếu thiếu khoá, mất mạng, hết hạn mức hoặc quá `OCR_GEMINI_TIMEOUT_SECONDS` (10 giây), server tự chuyển sang EasyOCR. Khi đó mức cỡ chữ được tính theo chiều cao khung. Phản hồi có trường `engine` (`gemini`/`easyocr`) và `engine_error`. Muốn chỉ dùng EasyOCR thì đặt `OCR_ENGINE=easyocr`.
+
+**1. Ba mức cỡ chữ.** Cỡ chữ là chiều cao của chữ, so với dòng chữ lớn nhất trong ảnh:
+
+| Mức | Cỡ chữ | Xử lý |
+|---|---|---|
+| Chính (`main`) | ≥ 75% | Luôn đọc. Nếu chữ mờ thì nói *"Có biển hiệu nhưng chữ chưa rõ."*, không đọc chữ sai |
+| Phụ (`sub`) | 25–75% | Đọc nếu độ tin cậy ≥ 50% |
+| Chi tiết (`detail`) | < 25% | Mặc định bỏ qua. Chỉ đọc khi gửi `?detail=true` |
+
+**2. Thứ tự đọc.** Đọc mức Chính trước rồi đến mức Phụ. Trong cùng một mức, đọc từ trên xuống dưới, mỗi dòng đọc từ trái sang phải. Biển chia 2 cột thì đọc hết cột trái trước.
+
+**3. Mỗi loại nội dung có cách đọc riêng.** Server tự nhận loại, hoặc bạn chỉ định bằng `?context=`:
+- `sign` (biển hiệu): đọc theo bảng mức ở trên, tối đa 20 từ. Ví dụ: *"Biển hiệu: Bún Bò Huế. Bún Đậu Mẹt."*
+- `label` (nhãn đồ vật): đọc tên sản phẩm (chữ to nhất) trước, rồi đến các dòng HSD, NSX, dung tích. Không đọc bảng thành phần.
+- `text` (văn bản, giấy tờ): đọc hết theo thứ tự tự nhiên, không lọc theo cỡ chữ.
+
+**Điều kiện để một dòng được đọc (biển hiệu).** Xét lần lượt, gặp điều kiện nào trước thì dừng ở đó. Cột "Lý do" trên trang `/test` hiện đúng điều kiện đã quyết định:
+1. Mức **Chi tiết** và chưa bật `detail` → bỏ qua.
+2. *(chỉ khi dùng EasyOCR)* Khối nằm **chéo góc** so với chữ Chính, tức lệch cả theo chiều ngang lẫn chiều dọc → coi là biển bên cạnh, bỏ qua. Chữ nằm cùng hàng hoặc cùng cột với chữ Chính vẫn được đọc.
+3. Không còn chữ nào đủ tin cậy: mức Chính cần ≥ `OCR_MIN_CONFIDENCE`, mức Phụ cần ≥ `OCR_SUB_MIN_CONFIDENCE` → bỏ qua (chữ mờ). Nếu mọi dòng Chính đều mờ thì nói "Có biển hiệu nhưng chữ chưa rõ".
+4. **Giới hạn `OCR_SIGN_MAX_WORDS` từ**, không tính các ký hiệu như "-" hay "/": mức Chính luôn được đọc. Câu Phụ quá dài thì vẫn đọc các dòng đầu còn vừa. Các câu ngắn phía sau vẫn được xét tiếp.
+5. Còn lại → **đọc**.
+
+Các ngưỡng trên chỉnh được trong `server/.env` qua các biến `OCR_TIER_*`, `OCR_SUB_MIN_CONFIDENCE`, `OCR_SIGN_MAX_WORDS` và `OCR_LABEL_MAX_WORDS`.
 
 Luồng trên ESP32-CAM: chụp ảnh → `POST` tới endpoint tương ứng với thao tác nút → đọc `audio_url` trong JSON → tải MP3 và phát qua loa.
 
@@ -165,7 +199,13 @@ Prompt của trợ lý nằm ở [scene_assistant_prompt.md](server/app/services
 ## 6. Kiểm thử
 
 1. **Swagger UI:** <http://localhost:8000/docs> — thử trực tiếp mọi endpoint.
-2. **Trang kiểm thử:** <http://localhost:8000/test> — upload ảnh hoặc chụp webcam, chọn chế độ *Nhận diện vật thể* hoặc *Đọc chữ (OCR)*, xem kết quả và nghe giọng đọc.
+2. **Trang kiểm thử:** <http://localhost:8000/test> — upload ảnh hoặc chụp webcam, chọn chế độ *Nhận diện vật thể* hoặc *Đọc chữ (OCR)*, xem kết quả và nghe giọng đọc. Ở chế độ OCR có thể chọn loại nội dung và bật *Đọc cả chữ nhỏ*. Bảng kết quả hiện mức chữ của từng dòng và dòng nào được đọc.
+3. **Unit test cách đọc chữ** (không cần EasyOCR hay ảnh thật):
+   ```bash
+   pip install pytest
+   cd server
+   python -m pytest tests -v
+   ```
 
 ---
 
@@ -174,7 +214,8 @@ Prompt của trợ lý nằm ở [scene_assistant_prompt.md](server/app/services
 | Hiện tượng | Cách xử lý |
 |---|---|
 | `Could not load YOLO model` | Kiểm tra `YOLO_MODEL_PATH` là file `*-worldv2.pt`; kiểm tra Internet cho lần tải đầu. |
-| `/health` báo `ocr_loaded: false` | Lần đầu EasyOCR cần Internet để tải model vào `~/.EasyOCR/`. Xem log khởi động. |
+| `/health` báo `ocr_loaded: false` | Lần đầu EasyOCR cần Internet để tải model vào `~/.EasyOCR/`. Xem log khởi động. Nếu GitHub trả lỗi 504, tải file qua GitHub API (`api.github.com/repos/JaidedAI/EasyOCR/releases/assets/<id>`) rồi đặt vào `~/.EasyOCR/model/`. Khi đã có `GEMINI_API_KEY`, chức năng đọc chữ vẫn chạy được mà không cần EasyOCR. |
+| Câu đọc sai dấu hoặc dính chữ (`engine: easyocr`) | Điền `GEMINI_API_KEY` để dùng Gemini. Xem `engine_error` nếu Gemini vẫn bị bỏ qua. |
 | `audio_error` trong phản hồi | Edge-TTS / gTTS cần Internet; kết quả nhận diện/OCR vẫn được trả về. |
 | ESP32 không kết nối được | Máy chủ và ESP32 phải cùng mạng Wi-Fi; mở cổng 8000 trên Windows Firewall. |
 | Chạy chậm trên GPU 4GB | Đặt `MAX_CONCURRENT_REQUESTS=1` hoặc dùng `DEVICE=cpu` cho ổn định. |

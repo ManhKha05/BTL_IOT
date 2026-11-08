@@ -464,6 +464,18 @@
           <button class="tab-btn" id="modeOcr" onclick="setMode('ocr')">📖 Đọc chữ OCR (Long Press)</button>
         </div>
 
+        <div id="ocrOptions" style="display: none; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 13px; color: #cbd5e1; margin-bottom: 12px;">
+          <label>Loại nội dung:
+            <select id="ocrContext" style="margin-left: 4px; padding: 4px 6px; border-radius: 6px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155;">
+              <option value="auto">Tự động</option>
+              <option value="sign">Biển hiệu</option>
+              <option value="label">Nhãn đồ vật</option>
+              <option value="text">Văn bản / giấy tờ</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="ocrDetail"> Đọc cả chữ nhỏ (SĐT, địa chỉ...)</label>
+        </div>
+
         <button class="btn-primary" id="processBtn" disabled onclick="runIntegratedProcess()">
           <div class="spinner" id="spinner"></div>
           <span id="btnText">🚀 Nhận diện và Đọc (POST /api/process/detect)</span>
@@ -570,8 +582,8 @@
         label: '📖 Đọc chữ và Đọc to (POST /api/process/ocr)',
         busy: 'Đang nhận dạng chữ & tạo giọng nói...',
         title: 'CÁC DÒNG CHỮ NHẬN DẠNG ĐƯỢC (THỨ TỰ ĐỌC)',
-        hint: '(EasyOCR vi + en)',
-        thead: '<tr><th>#</th><th colspan="2">Dòng chữ</th><th>Tin cậy</th><th>Khung [x1,y1,x2,y2]</th></tr>'
+        hint: '(Xanh = Được đọc; Xám = Bỏ qua)',
+        thead: '<tr><th>#</th><th>Dòng chữ</th><th>Mức</th><th>Tin cậy</th><th>Lý do</th></tr>'
       }
     };
     let currentMode = 'detect';
@@ -589,6 +601,7 @@
       document.getElementById('tableTitle').textContent = cfg.title;
       document.getElementById('tableHint').textContent = cfg.hint;
       document.getElementById('objectsThead').innerHTML = cfg.thead;
+      document.getElementById('ocrOptions').style.display = mode === 'ocr' ? 'flex' : 'none';
       objectsTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Chưa có dữ liệu</td></tr>';
       relContainer.style.display = 'none';
     }
@@ -664,7 +677,15 @@
       formData.append('file', selectedFile);
 
       try {
-        const res = await fetch(MODES[currentMode].endpoint, {
+        let url = MODES[currentMode].endpoint;
+        if (currentMode === 'ocr') {
+          const params = new URLSearchParams({
+            context: document.getElementById('ocrContext').value,
+            detail: document.getElementById('ocrDetail').checked
+          });
+          url += '?' + params.toString();
+        }
+        const res = await fetch(url, {
           method: 'POST',
           body: formData
         });
@@ -731,21 +752,27 @@
       // 5a. OCR lines table
       if (currentMode === 'ocr') {
         if (data.lines && data.lines.length > 0) {
+          const TIER_VI = {main: 'Chính', sub: 'Phụ', detail: 'Chi tiết'};
           objectsTbody.innerHTML = data.lines.map((ln, i) => `
-            <tr class="spoken-row">
+            <tr class="${ln.spoken ? 'spoken-row' : 'filtered-row'}">
               <td>${i + 1}</td>
-              <td colspan="2"><strong>${escapeHtml(ln.text)}</strong></td>
+              <td><strong>${escapeHtml(ln.text)}</strong></td>
+              <td>${TIER_VI[ln.tier] || ln.tier}</td>
               <td>${(ln.confidence * 100).toFixed(0)}%</td>
-              <td style="font-family:'JetBrains Mono', monospace; font-size:11px;">[${ln.bbox.join(', ')}]</td>
+              <td>${ln.spoken ? '<span class="badge-spoken">★ ĐỌC</span>' : '<span class="badge-filtered">' + escapeHtml(ln.reason || 'Bỏ qua') + '</span>'}</td>
             </tr>`).join('');
         } else {
           objectsTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Không đọc được dòng chữ nào</td></tr>';
         }
         document.getElementById('mModel').textContent = data.engine || 'easyocr';
+        statusTag.textContent = data.engine_error
+          ? `Hoàn thành · EasyOCR (Gemini lỗi: ${data.engine_error})`
+          : `Hoàn thành · ${data.engine === 'gemini' ? 'Gemini' : 'EasyOCR'}`;
         document.getElementById('mYolo').textContent = data.inference_time_ms + 'ms';
         document.getElementById('mTTS').textContent = (data.tts_time_ms ? data.tts_time_ms + 'ms' : '--');
         document.getElementById('mTotal').textContent = data.total_time_ms + 'ms';
-        document.getElementById('mSpoken').textContent = `${(data.lines || []).length} dòng`;
+        const ocrLines = data.lines || [];
+        document.getElementById('mSpoken').textContent = `${ocrLines.filter(l => l.spoken).length}/${ocrLines.length} dòng`;
         if (data.audio_error) console.warn('TTS error:', data.audio_error);
         return;
       }

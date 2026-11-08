@@ -115,8 +115,32 @@ class Settings(BaseModel):
         ]
     )
     OCR_MIN_CONFIDENCE: float = Field(default_factory=lambda: float(os.getenv("OCR_MIN_CONFIDENCE", "0.30")))
-    OCR_MAX_IMAGE_SIDE: int = Field(default_factory=lambda: int(os.getenv("OCR_MAX_IMAGE_SIDE", "1600")))
+    OCR_MAX_IMAGE_SIDE: int = Field(default_factory=lambda: int(os.getenv("OCR_MAX_IMAGE_SIDE", "1280")))
+    OCR_CLAHE: bool = Field(default_factory=lambda: os.getenv("OCR_CLAHE", "false").lower() in ("true", "1", "yes"))
     OCR_MAX_SPOKEN_CHARS: int = Field(default_factory=lambda: int(os.getenv("OCR_MAX_SPOKEN_CHARS", "300")))
+    # Đoạn chữ dưới ngưỡng này bị bỏ hẳn; từ ngưỡng này tới OCR_MIN_CONFIDENCE coi là "chữ mờ" (không đọc)
+    OCR_TIER_MIN_CONFIDENCE: float = Field(default_factory=lambda: float(os.getenv("OCR_TIER_MIN_CONFIDENCE", "0.15")))
+    # 3 mức cỡ chữ (chiều cao so với chữ lớn nhất): Chính >= MAIN, Phụ >= SUB, còn lại Chi tiết
+    OCR_TIER_MAIN_RATIO: float = Field(default_factory=lambda: float(os.getenv("OCR_TIER_MAIN_RATIO", "0.75")))
+    OCR_TIER_SUB_RATIO: float = Field(default_factory=lambda: float(os.getenv("OCR_TIER_SUB_RATIO", "0.25")))
+    OCR_SUB_MIN_CONFIDENCE: float = Field(default_factory=lambda: float(os.getenv("OCR_SUB_MIN_CONFIDENCE", "0.50")))
+    OCR_SIGN_MAX_WORDS: int = Field(default_factory=lambda: int(os.getenv("OCR_SIGN_MAX_WORDS", "20")))
+    OCR_LABEL_MAX_WORDS: int = Field(default_factory=lambda: int(os.getenv("OCR_LABEL_MAX_WORDS", "30")))
+    # Engine nhận dạng chữ: 'auto' (Gemini nếu có GEMINI_API_KEY, lỗi thì EasyOCR), 'gemini', 'easyocr'
+    OCR_ENGINE: str = Field(default_factory=lambda: os.getenv("OCR_ENGINE", "auto").strip().lower())
+    OCR_GEMINI_MODEL: str = Field(
+        default_factory=lambda: os.getenv("OCR_GEMINI_MODEL", "gemini-3.1-flash-lite")
+    )
+    OCR_GEMINI_MEDIA_RESOLUTION: str = Field(default_factory=lambda: os.getenv("OCR_GEMINI_MEDIA_RESOLUTION", "MEDIUM"))
+    OCR_GEMINI_TIMEOUT_SECONDS: float = Field(
+        default_factory=lambda: float(os.getenv("OCR_GEMINI_TIMEOUT_SECONDS", "12")),
+        gt=0,
+        validate_default=True,
+    )
+    # Gemini thỉnh thoảng trả lời chậm bất thường (18-42 s): sau HEDGE giây chưa có kết quả thì gửi thêm
+    # một request song song, tối đa MAX_PARALLEL request, lấy kết quả về sớm nhất
+    OCR_GEMINI_HEDGE_SECONDS: float = Field(default_factory=lambda: float(os.getenv("OCR_GEMINI_HEDGE_SECONDS", "4")))
+    OCR_GEMINI_MAX_PARALLEL: int = Field(default_factory=lambda: int(os.getenv("OCR_GEMINI_MAX_PARALLEL", "3")))
     OCR_TTS_ENGINE: str = Field(default_factory=lambda: os.getenv("OCR_TTS_ENGINE", "edge").lower())
     OCR_TTS_VOICE: str = Field(default_factory=lambda: os.getenv("OCR_TTS_VOICE", "vi-VN-HoaiMyNeural"))
 

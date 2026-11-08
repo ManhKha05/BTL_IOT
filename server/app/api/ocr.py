@@ -31,9 +31,13 @@ ERROR_RESPONSES = {
 CONTEXT_QUERY = Query(
     "auto",
     pattern="^(auto|sign|label|text)$",
-    description="Câu dẫn: 'auto' (tự chọn), 'sign' → 'Nội dung biển hiệu', 'label' → 'Nội dung nhãn', 'text' → 'Nội dung đọc được'.",
+    description=(
+        "Loại nội dung: 'auto' (tự chọn), 'sign' → 'Biển hiệu: ...' (lọc theo cỡ chữ), "
+        "'label' → 'Nhãn: ...' (tên sản phẩm + HSD/NSX/dung tích), 'text' → 'Văn bản: ...' (đọc hết, không lọc)."
+    ),
 )
 SAVE_DEBUG_QUERY = Query(None, description="Lưu ảnh có khung chữ vào data/images để kiểm thử.")
+DETAIL_QUERY = Query(False, description="Đọc cả chữ nhỏ mức Chi tiết (SĐT, địa chỉ, quảng cáo...). Mặc định bỏ qua.")
 FILE_PARAM = File(None, description="Ảnh JPEG/PNG (tối đa 5MB) - multipart field 'file' hoặc raw body image/jpeg.")
 
 
@@ -42,6 +46,7 @@ async def _run_ocr(
     file: Optional[UploadFile],
     context: str,
     save_debug: Optional[bool],
+    detail: bool = False,
 ) -> Tuple[OCRResult, int, int, Optional[str]]:
     image_bytes = await extract_image_bytes(request, file)
     validate_image_bytes(image_bytes, settings.MAX_IMAGE_SIZE_BYTES)
@@ -49,7 +54,12 @@ async def _run_ocr(
     h, w, _ = img_rgb.shape
 
     try:
-        result = await ocr_service.read(img_rgb, context=context)
+        result = await ocr_service.read(
+            img_rgb,
+            context=context,
+            detail=detail,
+            client=getattr(request.app.state, "gemini_client", None),
+        )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OCR xử lý quá thời gian cho phép.")
     except (ImportError, RuntimeError) as e:
@@ -69,6 +79,9 @@ async def _run_ocr(
                 filename_prefix="esp32_ocr",
             )
             debug_image_url = f"/data/images/{saved.name}"
+            # Lưu kèm ảnh gốc (cùng tên + '_raw') để chạy lại OCR khi cần dò lỗi
+            raw_path = saved.with_name(f"{saved.stem}_raw.jpg")
+            raw_path.write_bytes(image_bytes)
         except Exception as e:
             logger.warning(f"Could not save OCR debug image: {e}")
 
@@ -78,12 +91,20 @@ async def _run_ocr(
 def _base_fields(result: OCRResult, w: int, h: int, debug_image_url: Optional[str]) -> dict:
     return dict(
         success=True,
-        has_text=bool(result.lines),
+        has_text=result.has_text,
         text=result.text,
         description=result.description,
         context=result.context,
+        detail=result.detail,
         lines=[
-            OCRTextLine(text=ln.text, confidence=round(min(max(ln.confidence, 0.0), 1.0), 4), bbox=ln.bbox)
+            OCRTextLine(
+                text=ln.text,
+                confidence=round(min(max(ln.confidence, 0.0), 1.0), 4),
+                bbox=ln.bbox,
+                tier=ln.tier,
+                spoken=ln.spoken,
+                reason=ln.reason,
+            )
             for ln in result.lines
         ],
         low_confidence_count=result.low_confidence_count,
@@ -91,7 +112,8 @@ def _base_fields(result: OCRResult, w: int, h: int, debug_image_url: Optional[st
         image_width=w,
         image_height=h,
         debug_image_url=debug_image_url,
-        engine="easyocr",
+        engine=result.engine,
+        engine_error=result.engine_error,
     )
 
 
@@ -106,9 +128,10 @@ async def ocr_endpoint(
     file: Optional[UploadFile] = FILE_PARAM,
     context: str = CONTEXT_QUERY,
     save_debug: Optional[bool] = SAVE_DEBUG_QUERY,
+    detail: bool = DETAIL_QUERY,
     _auth: None = Depends(verify_api_key),
 ):
-    result, w, h, debug_url = await _run_ocr(request, file, context, save_debug)
+    result, w, h, debug_url = await _run_ocr(request, file, context, save_debug, detail)
     logger.info(f"OCR completed: {len(result.lines)} lines in {result.inference_time_ms:.1f}ms | '{result.description}'")
     return OCRResponse(**_base_fields(result, w, h, debug_url))
 
@@ -122,9 +145,10 @@ async def ocr_endpoint(
     description=(
         "Dành cho thao tác nhấn giữ nút 1,5 giây trên thiết bị:\n"
         "1. Nhận ảnh JPEG từ ESP32-CAM (multipart hoặc raw body).\n"
-        "2. EasyOCR nhận dạng chữ tiếng Việt / tiếng Anh.\n"
-        "3. Gom chữ theo dòng, khối và tạo câu, ví dụ 'Nội dung biển hiệu: Nhà thuốc Pharmacity.'\n"
-        "4. Edge-TTS (dự phòng gTTS) tạo file MP3 và trả về audio_url."
+        "2. Gemini nhận dạng chữ tiếng Việt (nếu có GEMINI_API_KEY), lỗi thì dùng EasyOCR.\n"
+        "3. Chia chữ 3 mức theo cỡ (Chính ≥ 75%, Phụ 25–75%, Chi tiết < 25% so với chữ lớn nhất).\n"
+        "4. Đọc Chính → Phụ, trên → dưới, khối trái trước; ví dụ 'Biển hiệu: Bún bò Huế. Bún đậu mẹt.'\n"
+        "5. Edge-TTS (dự phòng gTTS) tạo file MP3 và trả về audio_url."
     ),
 )
 async def process_ocr_endpoint(
@@ -132,10 +156,11 @@ async def process_ocr_endpoint(
     file: Optional[UploadFile] = FILE_PARAM,
     context: str = CONTEXT_QUERY,
     save_debug: Optional[bool] = SAVE_DEBUG_QUERY,
+    detail: bool = DETAIL_QUERY,
     _auth: None = Depends(verify_api_key),
 ):
     total_start = time.perf_counter()
-    result, w, h, debug_url = await _run_ocr(request, file, context, save_debug)
+    result, w, h, debug_url = await _run_ocr(request, file, context, save_debug, detail)
 
     audio_id: Optional[str] = None
     audio_url: Optional[str] = None
