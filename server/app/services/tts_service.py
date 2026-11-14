@@ -15,6 +15,75 @@ from app.core.logging import logger
 UUID_REGEX = re.compile(r"^[a-fA-F0-9]{32}$")
 
 
+def _prepend_silence_frames(file_path: Path, duration_seconds: float = 0.8) -> None:
+    """
+    Chèn trực tiếp các khung âm thanh im lặng (silent MP3 frames) vào đầu file MP3.
+    Đảm bảo 100% phần cứng ESP32 / MAX98357A có thời gian bật bộ khuếch đại và đệm buffer,
+    không phụ thuộc vào việc engine TTS có bỏ qua dấu câu hay không.
+    """
+    try:
+        data = file_path.read_bytes()
+        if len(data) < 4:
+            return
+
+        # Tìm sync word của MP3 (11 bit 1 liên tiếp)
+        idx = 0
+        while idx < len(data) - 4:
+            if data[idx] == 0xFF and (data[idx + 1] & 0xE0) == 0xE0:
+                break
+            idx += 1
+
+        if idx >= len(data) - 4:
+            return
+
+        b1, b2 = data[idx + 1], data[idx + 2]
+        ver = (b1 >> 3) & 3
+        layer = (b1 >> 1) & 3
+        bitrate_idx = (b2 >> 4) & 15
+        sr_idx = (b2 >> 2) & 3
+        padding = (b2 >> 1) & 1
+
+        # MPEG 1 Layer III
+        if ver == 3 and layer == 1:
+            sr_table = [44100, 48000, 32000]
+            br_table = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+            if sr_idx < len(sr_table) and bitrate_idx < len(br_table):
+                sr = sr_table[sr_idx]
+                br = br_table[bitrate_idx] * 1000
+                frame_len = int(144 * br / sr) + padding
+                samples_per_frame = 1152
+            else:
+                return
+        # MPEG 2 / 2.5 Layer III (gTTS phổ biến)
+        elif ver in (0, 2) and layer == 1:
+            sr_table = [22050, 24000, 16000] if ver == 2 else [11025, 12000, 8000]
+            br_table = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+            if sr_idx < len(sr_table) and bitrate_idx < len(br_table):
+                sr = sr_table[sr_idx]
+                br = br_table[bitrate_idx] * 1000
+                frame_len = int(72 * br / sr) + padding
+                samples_per_frame = 576
+            else:
+                return
+        else:
+            return
+
+        frame_ms = samples_per_frame / sr
+        num_frames = max(1, int(duration_seconds / frame_ms))
+
+        # Tạo frame im lặng: giữ nguyên header 4 bytes hợp lệ, xoá sạch payload về 0
+        silence_frame = bytearray(data[idx:idx + frame_len])
+        for k in range(4, len(silence_frame)):
+            silence_frame[k] = 0
+
+        # Ghép các frame im lặng vào trước toàn bộ dữ liệu âm thanh
+        new_data = bytes(silence_frame) * num_frames + data
+        file_path.write_bytes(new_data)
+        logger.info(f"Prepended {num_frames} silence MP3 frames (~{duration_seconds}s) for hardware anti-clip.")
+    except Exception as e:
+        logger.warning(f"Could not prepend silence frames to MP3: {e}")
+
+
 class TTSService:
     """
     Text-to-Speech service using Microsoft Edge-TTS:
@@ -70,6 +139,10 @@ class TTSService:
                 detail=f"Độ dài văn bản ({len(cleaned_text)} ký tự) vượt quá giới hạn cho phép (500 ký tự)."
             )
 
+        # Thêm khoảng lặng nhẹ ở đầu câu (bằng dấu chấm lửng / dấu phẩy ngắt quãng)
+        # Giúp DAC/IC khuếch đại (MAX98357A) và buffer I2S trên ESP32 kịp khởi động, không bị nuốt 2-3 từ đầu.
+        spoken_text = f"... , {cleaned_text}"
+
         audio_id = uuid.uuid4().hex
         final_file = self.output_dir / f"{audio_id}.mp3"
         temp_file = self.output_dir / f"{audio_id}.tmp.mp3"
@@ -88,13 +161,14 @@ class TTSService:
                     try:
                         logger.info(
                             f"Synthesizing Edge-TTS voice '{edge_voice}' (attempt {attempt + 1}/{edge_attempts}) "
-                            f"for audio_id={audio_id} ({len(cleaned_text)} chars)..."
+                            f"for audio_id={audio_id} ({len(spoken_text)} chars)..."
                         )
-                        communicate = edge_tts.Communicate(text=cleaned_text, voice=edge_voice, rate=edge_rate)
+                        communicate = edge_tts.Communicate(text=spoken_text, voice=edge_voice, rate=edge_rate)
                         await asyncio.wait_for(communicate.save(str(temp_file)), timeout=settings.TTS_TIMEOUT_SECONDS)
                         if not temp_file.exists() or temp_file.stat().st_size == 0:
                             raise RuntimeError("Tệp âm thanh Edge-TTS sinh ra bị rỗng.")
                         temp_file.replace(final_file)
+                        _prepend_silence_frames(final_file, duration_seconds=0.8)
                         duration_ms = (time.perf_counter() - start_time) * 1000.0
                         file_size = final_file.stat().st_size
                         logger.info(f"Edge-TTS speech created: audio_id={audio_id}, size={file_size} bytes in {duration_ms:.1f}ms.")
@@ -124,11 +198,11 @@ class TTSService:
 
                     logger.info(
                         f"Synthesizing Northern female voice (attempt {attempt + 1}/{max_retries}) "
-                        f"for audio_id={audio_id} ({len(cleaned_text)} chars)..."
+                        f"for audio_id={audio_id} ({len(spoken_text)} chars)..."
                     )
 
                     from gtts import gTTS
-                    tts = gTTS(text=cleaned_text, lang="vi", slow=False)
+                    tts = gTTS(text=spoken_text, lang="vi", slow=False)
                     await asyncio.wait_for(
                         asyncio.to_thread(tts.save, str(temp_file)),
                         timeout=settings.TTS_TIMEOUT_SECONDS
@@ -138,6 +212,7 @@ class TTSService:
                         raise RuntimeError("Tệp âm thanh sinh ra bị rỗng.")
 
                     temp_file.replace(final_file)
+                    _prepend_silence_frames(final_file, duration_seconds=0.8)
                     duration_ms = (time.perf_counter() - start_time) * 1000.0
                     file_size = final_file.stat().st_size
 
@@ -164,6 +239,7 @@ class TTSService:
                 await asyncio.wait_for(communicate.save(str(temp_file)), timeout=settings.TTS_TIMEOUT_SECONDS)
                 if temp_file.exists() and temp_file.stat().st_size > 0:
                     temp_file.replace(final_file)
+                    _prepend_silence_frames(final_file, duration_seconds=0.8)
                     duration_ms = (time.perf_counter() - start_time) * 1000.0
                     return audio_id, final_file, final_file.stat().st_size, round(duration_ms, 2)
             except Exception:
